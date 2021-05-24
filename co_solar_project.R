@@ -49,5 +49,15 @@ solar_data_6 <- solar_data_5 %>%
   filter(utility_number != 99999) %>% 
   filter(utility_number != 27058)
 
+# Adding Kw per customer column for residential, commercial, industrial, and total. 
+solar_data_7 <- solar_data_6 %>% 
+  mutate(kw_per_customer_residential = residential_capacity_photovoltaic/residential_customer_photovoltaic,
+         kw_per_customer_commercial = commercial_capacity_photovoltaic/commercial_customer_photovoltaic,
+         kw_per_customer_industrial = industrial_capacity_photovoltaic/industrial_customer_photovoltaic,
+         kw_per_customer_total = total_capacity_photovoltaic/total_customer_photovoltaic)
+
+# Replacing all NA, NAN with 0
+solar_data_8 <- solar_data_7 %>% 
+  
 
 
