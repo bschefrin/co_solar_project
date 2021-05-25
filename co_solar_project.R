@@ -27,13 +27,9 @@ solar_data_3 <- solar_data_2 %>%
 # converting megawatts to kilowatts
 solar_data_4 <- solar_data_3 %>% 
   mutate(residential_capacity_photovoltaic = residential_capacity_photovoltaic*1000,
-         residential_sold_back_photovoltaic = residential_sold_back_photovoltaic*1000,
          commercial_capacity_photovoltaic = commercial_capacity_photovoltaic *1000,
-         commercial_sold_back_photovoltaic = commercial_sold_back_photovoltaic*1000,
          industrial_capacity_photovoltaic = industrial_capacity_photovoltaic*1000,
-         industrial_sold_back_photovoltaic = industrial_sold_back_photovoltaic*1000,
-         total_capacity_photovoltaic = total_capacity_photovoltaic*1000,
-         total_sold_back_photovoltaic = total_sold_back_photovoltaic*1000)
+         total_capacity_photovoltaic = total_capacity_photovoltaic*1000)
 
 # Using lubridate to convert months & year to date format and dropping year, month columns
 solar_data_5 <- solar_data_4 %>% 
@@ -56,8 +52,30 @@ solar_data_7 <- solar_data_6 %>%
          kw_per_customer_industrial = industrial_capacity_photovoltaic/industrial_customer_photovoltaic,
          kw_per_customer_total = total_capacity_photovoltaic/total_customer_photovoltaic)
 
-# Replacing all NA, NAN with 0
+# Replacing all NA with 0
 solar_data_8 <- solar_data_7 %>% 
-  
+  replace(is.na(.), 0) 
+
+# Making all utility names the same. This applies especially to Poudre Valley, there are 3 different 
+# ways it is listed but all the same utility number. Also Public Service Co of Colorado is known
+# commonly as Xcel Energy, so I am renaming ii to Xcel Energy
+solar_data_9 <- solar_data_8 %>% 
+  mutate(utility_name = if_else(utility_number == 15466, "Xcel Energy", utility_name),
+         utility_name = if_else(utility_number == 56146, "Black Hills Colorado Electric LLC", utility_name),
+         utility_name = if_else(utility_number == 15257, "Poudre Valley REA, Inc", utility_name)
+         )
+
+# cleaning up environment, run this at your own risk.....
+rm(list=setdiff(ls(), "solar_data_9"))
 
 
+# Residential Solar--------------------------------------------------------------------------------------
+
+# getting residential PV data from master data frame
+residential_solar <- solar_data_9 %>% 
+  select(date, utility_number, utility_name, residential_capacity_photovoltaic,
+         residential_customer_photovoltaic, residential_sold_back_photovoltaic,
+         kw_per_customer_residential)
+residential_solar_customer_graph <- ggplot(data = residential_solar) +
+  geom_line(mapping = aes(x = date, y = residential_customer_photovoltaic, color = utility_name))
+residential_solar_customer_graph
