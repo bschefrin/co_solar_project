@@ -5,7 +5,7 @@
 library(pacman)
 
 #packages for project
-p_load(tidyverse, lubridate, janitor)
+p_load(tidyverse, lubridate, janitor, viridis)
 
 # reading in data
 solar_data <- read_csv("C:/Users/Jake/Desktop/r_projects/shiny_projects/co_solar_power/electricity_net_metering_in_colorado.csv")
@@ -76,6 +76,46 @@ residential_solar <- solar_data_9 %>%
   select(date, utility_number, utility_name, residential_capacity_photovoltaic,
          residential_customer_photovoltaic, residential_sold_back_photovoltaic,
          kw_per_customer_residential)
-residential_solar_customer_graph <- ggplot(data = residential_solar) +
-  geom_line(mapping = aes(x = date, y = residential_customer_photovoltaic, color = utility_name))
-residential_solar_customer_graph
+
+# Residential Customer Graphs
+
+# Giving Xcel its own graph due to much higher population compared to all other utility areas
+residential_solar_xcel <- residential_solar %>% 
+  filter(utility_number == 15466)
+
+residential_solar_xcel_graph <- ggplot(data = residential_solar_xcel) +
+  geom_line(mapping = aes(x = date, y = residential_customer_photovoltaic, color = utility_name), size = 1.5) +
+  labs(title = "Total Customers with Home PV (Xcel Energy)", subtitle= "2011-2020", 
+       x = "Date", y = "Total customers", fill = "Utility") +
+  theme_minimal()
+  
+      
+
+residential_solar_not_xcel <- residential_solar %>% 
+  filter(utility_number != 15466)
+
+residential_solar_not_xcel_graph <- ggplot(data = residential_solar_not_xcel) +
+  geom_line(mapping = aes(x = date, y = residential_customer_photovoltaic, color = utility_name), size = 1.5) +
+  labs(title = "Total Customers with Home PV (Xcel Excluded)", subtitle= "2011-2020",
+       x = "Date", y = "Total customers") +
+  scale_color_viridis(name = "Utility Co", discrete = TRUE) +
+  theme_minimal()
+
+# Residential Capacity Graphs
+
+# Once again Xcel gets its own graph
+residential_solar_xcel_capacity_graph <- ggplot(data = residential_solar_xcel) +
+  geom_line(mapping = aes(x = date, y = residential_capacity_photovoltaic, color = utility_name), size = 1.5) +
+  labs(title = "Total Home PV Capacity (Xcel Energy)", subtitle= "2011-2020",
+       x = "Date", y = "Total capacity (Kw)") +
+  scale_color_viridis(name = "Utility Co", discrete = TRUE) +
+  theme_minimal()
+
+residential_solar_not_xcel_capacity_graph <- ggplot(data = residential_solar_not_xcel) +
+  geom_line(mapping = aes(x = date, y = residential_capacity_photovoltaic, color = utility_name), size = 1.5) +
+  labs(title = "Total Home PV Capacity (Xcel Excluded)", subtitle= "2011-2020",
+       x = "Date", y = "Total capacity (Kw)") +
+  scale_color_viridis(name = "Utility Co", discrete = TRUE) +
+  theme_minimal()
+
+
