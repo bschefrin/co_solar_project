@@ -1,11 +1,14 @@
-#Project examining home PV solar in Colorado and doing a CBA comparing the benefits from lower carbon 
-#emissions vs the costs of subsidies for installation. 
+---
+title: "Colorado Home & Commercial PV Trends"
+author: "Jake Schefrin"
+output: html_document
+---
 
-# Loading packages and data ---------------------------------------------------------------------------
-library(pacman)
+```{r setup, include=FALSE, echo=FALSE}
+library("pacman")
 
 #packages for project
-p_load(tidyverse, lubridate, janitor, viridis, plotly, scales)
+p_load(tidyverse, lubridate, janitor, viridis)
 
 # reading in data
 solar_data <- read_csv("C:/Users/Jake/Desktop/r_projects/shiny_projects/co_solar_power/electricity_net_metering_in_colorado.csv")
@@ -70,26 +73,24 @@ solar_data_9 <- solar_data_8 %>%
 # cleaning up environment, run this at your own risk.....
 rm(list=setdiff(ls(), "solar_data_9"))
 
+```
+## What is this?
+I recently read an [article](https://www.theamericanconsumer.org/wp-content/uploads/2014/08/ConsumerGram_Net-Metering.pdf) talking about the costs from home solar incentive programs. The article makes some good points about what these costs are and who these programs benefit. However internal questions were raised, namely why only do a cost analysis when there is easily available data to do a benefit one? Why not do a state by state breakdown vs using the national averages? The authors also neglected to assign a dollar value to the costs. My goal is to try and put a dollar amount on the cost of home and commercial solar programs in Colorado, as well as the benefits resulting from fewer carbon emissions. I've been working on this off and on for a while, but I wanted to share some of the visuals from the data in the meantime, as well as some of the data issues with Colorado EIA data.
 
-solar_data_10 <- solar_data_9 %>% 
-  group_by(utility_number) %>% 
-  arrange(date) %>% 
-  mutate(residential_monthly_customer_change = residential_customer_photovoltaic - 
-           (lag(residential_customer_photovoltaic))) %>% 
-  mutate(residential_monthly_capacity_change = residential_capacity_photovoltaic -
-           (lag(residential_capacity_photovoltaic))) %>% 
-  ungroup()
-  
+## Data
+All data comes from the [Energy Information Administration](https://www.eia.gov/) and the [Colorado Information Marketplace](https://data.colorado.gov/Environment/Electricity-Net-Metering-in-Colorado/y23n-tr7i). Data is from 2012 to 2019. The data set did not include all utilities in Colorado. Data was available for the following utilities: Public Service Co of Colorado (Xcel Energy), Black Hills Colorado Electric, Intermountain Rural Electric Assn, Moon Lake Electric Assn, Poudre Valley Rural Electric Assn, San Luis Valley REC, United Power, City of Colorado Springs, and City of Fort Collins. There are some data entry errors so not all graphs include all utilities. I have uploaded the csv from the Colorado Information Marketplace onto my GitHub, as well as the R code used to clean and prep the data. A link to the repository is [here](https://github.com/bschefrin/co_solar_project). Locations of the utilities in Colorado can be found on the map below. It's a moderately easier version of Where's Waldo.
+```{r utility_locations, echo=FALSE}
+knitr::include_graphics("C:\\Users\\Jake\\Desktop\\r_projects\\shiny_projects\\co_solar_power\\colorado_electric_utility_service_territories_map.PNG")
 
-# Residential Solar--------------------------------------------------------------------------------------
+```
 
-# getting residential PV data from master data frame
-residential_solar <- solar_data_10 %>% 
-  select(date, utility_number, utility_name, residential_capacity_photovoltaic, residential_monthly_capacity_change,
-         residential_customer_photovoltaic, residential_monthly_customer_change, residential_sold_back_photovoltaic,
+## Home Solar
+```{r, home_solar,message = FALSE,out.width="100%" ,echo=FALSE}
+residential_solar <- solar_data_9 %>% 
+  select(date, utility_number, utility_name, residential_capacity_photovoltaic,
+         residential_customer_photovoltaic, residential_sold_back_photovoltaic,
          kw_per_customer_residential)
 
-# Residential Customer Graphs
 
 # Giving Xcel its own graph due to much higher population compared to all other utility areas
 residential_solar_xcel <- residential_solar %>% 
@@ -148,58 +149,28 @@ residential_solar_kw_per_customer_graph <- ggplot(data = residential_solar_kw_pe
   scale_y_continuous(breaks = c(2, 4, 6, 8)) +
   theme_minimal()
 
-#CBA  --------------------------------------------------------------------------------------------------
+residential_solar_kw_per_customer_graph
 
-# Examining residential capacity changes and constructing a taxpayer cost
-cba_residential_solar_capacity_change <- residential_solar %>% 
-  select(date, utility_name, residential_monthly_capacity_change) %>% 
-  pivot_wider(names_from = utility_name, values_from = residential_monthly_capacity_change) %>% 
-  # Only want yearly totals due to NREL cost per watt data
-  mutate(date = format(date, format = "%Y")) %>% 
-  replace(is.na(.), 0) %>% 
-  group_by(date) %>% 
-  #collapsing all year rows into one
-  summarise_each(funs(sum)) %>% 
-  # Column for total added capacity for year
-  mutate(total_kw_change = rowSums(.[2:10])) %>% 
-  # NREL cost per watt data only goes through 2017
-  filter(date <= 2017) %>% 
-  #NREL cost per watt data over time for residential PV systems
-  mutate(cost_per_kw = matrix(c(4480, 3920, 3440, 3180, 2980, 2800), ncol = 1)) %>% 
-  # Estimated amount spent on home PV for Utilities with the available data
-  mutate(total_cost = total_kw_change*cost_per_kw,
-         # Fed Tax Credit worth 30% of total cost
-         fed_tax_credit = total_cost*0.3,
-         # Assumes a sales tax rate of 8.9%, higher than average but probably closer to a true value
-         sales_tax_credit = total_cost*0.089,
-         total_tax_credit = fed_tax_credit + sales_tax_credit,
-         customer_cost = total_cost - total_tax_credit,
-         # Assumption 1kW saves 1.3505 MT of co2 per year over a 25 year lifecycle
-         co2_saved = total_kw_change*1.3505*25,
-         # Social cost of carbon priced at $51/MT
-         scc_calculation = co2_saved*51)
 
-cba_cost_graph <- plot_ly(data = cba_residential_solar_capacity_change,
-                     x = ~date, y = ~customer_cost, type = 'bar', name = 'Customer Cost') %>% 
-  add_trace(y = ~fed_tax_credit, name = 'Fed Tax Credit') %>% 
-  add_trace(y = ~sales_tax_credit, name = 'Sales Tax Credit') %>% 
-  layout(title = 'Residential PV Sales and Tax Credits for CO',yaxis = list(title = 'Total Sales ($)'), 
-         xaxis = list(title = 'Year'), barmode = 'stack')
+```
+The solar Kw per customer is gradually increasing for most utilities. I found it interesting that Xcel didn't increase, though that could be because of constraints in available space for solar panels. Colorado Springs also remained pretty consistent. I found [this](https://www.csu.org/Documents/RenewableEnergyRebateFactSheet.pdf?csf=1&e=neSDSb) on the Colorado Springs Utility website stating that a 4 Kw PV system was enough for most houses and their customers appear to be roughly following that guideline. Nationally the average is 5 Kw but with a lot of variation between regions.
 
-credit_vs_scc_data <- cba_residential_solar_capacity_change %>% 
-  select(date, total_tax_credit, scc_calculation) %>% 
-  pivot_longer(cols = c(total_tax_credit, scc_calculation), names_to = 'total')
+```{r, residential_not_xcel, fig.show="hold", out.width="50%", echo=FALSE}
+residential_solar_not_xcel_graph
+residential_solar_not_xcel_capacity_graph
+```
+Capacity and customers for United Power, Colorado Springs, and Intermountain Rural Electric rise dramatically over the span of the data while other utilities like Black Hills Colorado Electric do not. I did some digging on their respective websites and found that Black Hills does not have an opt in solar purchasing program for their customers while the first three do. I could not find if the EIA includes these opt in customers in their net metering data for customers and capacity, or if this is more people building home solar. 
 
-credit_vs_scc_graph <- ggplot(data = credit_vs_scc_data) +
-  geom_line(mapping =  aes(x = date, y = value, group = total, color = total), size = 1.5) +
-  labs(title = "Tax Cost vs Social Cost of Carbon (SCC) for Colorado", subtitle = "2012 - 2017",
-       x = "Year", y = "Value ($)", color = "") +
-  scale_y_continuous(labels = unit_format(unit = 'M', scale = 1e-6)) +
-  scale_color_manual(labels = c('SCC', 'Tax Cost'), values = c('cyan3', 'olivedrab4')) +
-  theme_minimal()
+```{r, residential_xcel,  fig.show="hold", out.width="50%", echo=FALSE}
+residential_solar_xcel_graph
+residential_solar_xcel_capacity_graph
 
-# Commercial Solar ----------------------------------------------------------------------------------
-#Getting all commercial PV data into master data frame
+```
+
+One of the glaring issues with the data is that Xcel appears to have stopped being collected in 2018. Given its trend over time I find it highly suspect that they have reached their ceiling with both customers and capacity at the beginning of 2018.
+
+## Commercial Solar
+```{r, commercial_code, out.width="100%",message=FALSE,echo=FALSE}
 commercial_solar <- solar_data_9 %>% 
   select(date, utility_number, utility_name, commercial_capacity_photovoltaic, commercial_customer_photovoltaic,
          commercial_sold_back_photovoltaic, kw_per_customer_commercial)
@@ -256,35 +227,22 @@ commercial_solar_kw_per_customer_graph <- ggplot(data = commercial_solar) +
   scale_y_continuous() +
   theme_minimal()
 
-# Industrial Solar -------------------------------------------------------------------------------------
+commercial_solar_kw_per_customer_graph
+```
+Commercial PV per customer Kw remains relatively consistent for utilities except Colorado Springs. More on that below 
 
-industrial_solar <- solar_data_9 %>% 
-  select(date, utility_number, utility_name, industrial_capacity_photovoltaic, industrial_customer_photovoltaic,
-         industrial_sold_back_photovoltaic, kw_per_customer_industrial)
+```{r, commercial_not_xcel,  fig.show="hold", out.width="50%", echo=FALSE}
+commercial_solar_not_xcel_graph
+commercial_solar_not_xcel_capacity_graph
+```
+My best guess for the Colorado Springs spike (and drop in Kw per customer) would be the way they collected and/or classified commercial customer data. Capacity jumped well before the customer spike so it is difficult to say what happened here. 
 
-# Industrial solar customer Graph
-industrial_solar_customer_graph <- ggplot(data = industrial_solar) +
-  geom_line(mapping = aes(x = date, y = industrial_customer_photovoltaic, color = utility_name), size = 1.5) +
-  labs(title = "Total Indusrial Customers with PV", subtitle= "2012-2019", 
-       x = "Date", y = "Total customers", fill = "Utility") +
-  scale_color_viridis(name = "Utility Co", discrete = TRUE) +
-  theme_minimal()
+```{r, commercial_xcel,  fig.show="hold", out.width="50%", echo=FALSE}
+commercial_solar_xcel_graph
+commercial_solar_xcel_capacity_graph
+```
+As with residential PV data commercial PV data for Xcel flat lines in 2018.
 
-# Industrial solar capacity graph
+## Parting Thoughts
+This exercise was meant to convey the broad trends of home PV in Colorado. In general capacity and the number of customers participating in these programs are rising. Customers opting into solar programs offered by utilities may be driving a lot of this increase in Colorado. I intend to do more research on these programs in the future. I would also like to figure out if customers opting into these programs are counted by the EIA in these data sets. There is also the Xcel issue of data flat lining. Xcel is the biggest utility (with respect to customers served) in Colorado so not having 2 years worth of their data is unfortunate. I am hoping to do a rough CBA on this within the next few weeks. Till then thanks for reading, feel free to use this or contact me with any questions. Thanks!
 
-industrial_solar_capacity_graph <- ggplot(data = industrial_solar) +
-  geom_line(mapping = aes(x = date, y = industrial_capacity_photovoltaic, color = utility_name), size = 1.5) +
-  labs(title = "Total Industrial PV Capacity ", subtitle= "2012-2019",
-       x = "Date", y = "Total capacity (Kw)") +
-  scale_color_viridis(name = "Utility Co", discrete = TRUE) +
-  theme_minimal()
-
-# industrial Kw per customer
-
-industrial_solar_kw_per_customer_graph <- ggplot(data = industrial_solar) +
-  geom_line(mapping = aes(x = date, y = kw_per_customer_industrial, color = utility_name), size = 1.5) +
-  labs(title = "Average Industrial PV Size (Smoothed)", subtitle= "2012-2019",
-       x = "Date", y = "Kw per customer") +
-  scale_color_viridis(name = "Utility Co", discrete = TRUE) +
-  scale_y_continuous() +
-  theme_minimal()
