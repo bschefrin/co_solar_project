@@ -165,7 +165,8 @@ cba_residential_solar_capacity_change <- residential_solar %>%
   # NREL cost per watt data only goes through 2017
   filter(date <= 2017) %>% 
   #NREL cost per watt data over time for residential PV systems
-  mutate(cost_per_kw = matrix(c(4480, 3920, 3440, 3180, 2980, 2800), ncol = 1)) %>% 
+  mutate(cost_per_kw = matrix(c(4480, 3920, 3440, 3180, 2980, 2800), ncol = 1),
+         utility_cost_per_kw = matrix(c(2570, 2270, 2090, 1850, 1380, 1130), ncol = 1)) %>% 
   # Estimated amount spent on home PV for Utilities with the available data
   mutate(total_cost = total_kw_change*cost_per_kw,
          # Fed Tax Credit worth 30% of total cost
@@ -175,9 +176,10 @@ cba_residential_solar_capacity_change <- residential_solar %>%
          total_tax_credit = fed_tax_credit + sales_tax_credit,
          customer_cost = total_cost - total_tax_credit,
          # Assumption 1kW saves 1.3505 MT of co2 per year over a 25 year lifecycle
-         co2_saved = total_kw_change*1.3505*25,
+         co2_saved = total_kw_change*29.719,
          # Social cost of carbon priced at $51/MT
-         scc_calculation = co2_saved*51)
+         scc_calculation = co2_saved*51,
+         utility_capacity = total_tax_credit/utility_cost_per_kw)
 
 cba_cost_graph <- plot_ly(data = cba_residential_solar_capacity_change,
                      x = ~date, y = ~customer_cost, type = 'bar', name = 'Customer Cost') %>% 
@@ -185,6 +187,12 @@ cba_cost_graph <- plot_ly(data = cba_residential_solar_capacity_change,
   add_trace(y = ~sales_tax_credit, name = 'Sales Tax Credit') %>% 
   layout(title = 'Residential PV Sales and Tax Credits for CO',yaxis = list(title = 'Total Sales ($)'), 
          xaxis = list(title = 'Year'), barmode = 'stack')
+
+cba_price_per_watt <- ggplot(data = cba_residential_solar_capacity_change) +
+  geom_line(mapping =  aes(x = date, y = cost_per_kw, group = 1), size = 1.5, color = 'dodgerblue2') +
+  labs(title = "NREL Cost Per kW 2012-2017", subtitle = "5.7 kW system",
+       x = "Year", y = "Value ($)") +
+  theme_minimal()
 
 credit_vs_scc_data <- cba_residential_solar_capacity_change %>% 
   select(date, total_tax_credit, scc_calculation) %>% 

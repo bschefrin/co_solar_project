@@ -1,0 +1,243 @@
+---
+title: "Home Solar CBA for Colorado"
+author: "Benjamin Jacob Schefrin"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(pacman)
+
+#packages for project
+p_load(tidyverse, lubridate, janitor, viridis, plotly, scales)
+
+# reading in data
+solar_data <- read_csv("C:/Users/Jake/Desktop/r_projects/shiny_projects/co_solar_power/electricity_net_metering_in_colorado.csv")
+
+# Data Cleaning and prep--------------------------------------------------------------------------------
+
+# cleaning names
+
+solar_data_2 <- clean_names(solar_data)
+
+#selecting in PV data for residential and commercial 
+solar_data_3 <- solar_data_2 %>% 
+  select(year, month, state, utility_number, utility_name, residential_capacity_photovoltaic,
+         residential_customer_photovoltaic, residential_sold_back_photovoltaic, commercial_capacity_photovoltaic,
+         commercial_customer_photovoltaic, commercial_sold_back_photovoltaic, industrial_capacity_photovoltaic,
+         industrial_customer_photovoltaic, industrial_sold_back_photovoltaic, total_capacity_photovoltaic,
+         total_customer_photovoltaic, total_sold_back_photovoltaic)
+
+# converting megawatts to kilowatts
+solar_data_4 <- solar_data_3 %>% 
+  mutate(residential_capacity_photovoltaic = residential_capacity_photovoltaic*1000,
+         commercial_capacity_photovoltaic = commercial_capacity_photovoltaic *1000,
+         industrial_capacity_photovoltaic = industrial_capacity_photovoltaic*1000,
+         total_capacity_photovoltaic = total_capacity_photovoltaic*1000)
+
+# Using lubridate to convert months & year to date format and dropping year, month columns. No
+# data available from Xcel in 2011 so dropping all 2011 data
+solar_data_5 <- solar_data_4 %>% 
+  filter(year >= 2012) %>% 
+  mutate(date = make_date(year, month)) %>% 
+  select(-c(year, month)) %>% 
+  select(date, everything())
+
+# Filtering out State Adjustment and High West Energy. High West Energy doesn't produce any PV.
+# Longroad Energy has exaclty one data point so no use in retaining it.
+# I am unsure what the State Adjustment utility actually means. If you do know please let me know!
+solar_data_6 <- solar_data_5 %>% 
+  filter(utility_number != 61098) %>% 
+  filter(utility_number != 99999) %>% 
+  filter(utility_number != 27058)
+
+# Adding Kw per customer column for residential, commercial, industrial, and total. 
+solar_data_7 <- solar_data_6 %>% 
+  mutate(kw_per_customer_residential = residential_capacity_photovoltaic/residential_customer_photovoltaic,
+         kw_per_customer_commercial = commercial_capacity_photovoltaic/commercial_customer_photovoltaic,
+         kw_per_customer_industrial = industrial_capacity_photovoltaic/industrial_customer_photovoltaic,
+         kw_per_customer_total = total_capacity_photovoltaic/total_customer_photovoltaic)
+
+# Replacing all NA with 0. 
+solar_data_8 <- solar_data_7 %>% 
+  replace(is.na(.), 0) 
+
+# Making all utility names the same. This applies especially to Poudre Valley, there are 3 different 
+# ways it is listed but all the same utility number. Also Public Service Co of Colorado is known
+# commonly as Xcel Energy, so I am renaming ii to Xcel Energy. 
+solar_data_9 <- solar_data_8 %>% 
+  mutate(utility_name = if_else(utility_number == 15466, "Xcel Energy", utility_name),
+         utility_name = if_else(utility_number == 56146, "Black Hills Colorado Electric LLC", utility_name),
+         utility_name = if_else(utility_number == 15257, "Poudre Valley REA, Inc", utility_name)
+         )
+
+# cleaning up environment, run this at your own risk.....
+rm(list=setdiff(ls(), "solar_data_9"))
+
+
+solar_data_10 <- solar_data_9 %>% 
+  group_by(utility_number) %>% 
+  arrange(date) %>% 
+  mutate(residential_monthly_customer_change = residential_customer_photovoltaic - 
+           (lag(residential_customer_photovoltaic))) %>% 
+  mutate(residential_monthly_capacity_change = residential_capacity_photovoltaic -
+           (lag(residential_capacity_photovoltaic))) %>% 
+  ungroup()
+
+residential_solar <- solar_data_10 %>% 
+  select(date, utility_number, utility_name, residential_capacity_photovoltaic, residential_monthly_capacity_change,
+         residential_customer_photovoltaic, residential_monthly_customer_change, residential_sold_back_photovoltaic,
+         kw_per_customer_residential)
+
+# Examining residential capacity changes and constructing a taxpayer cost
+cba_residential_solar_capacity_change <- residential_solar %>% 
+  select(date, utility_name, residential_monthly_capacity_change) %>% 
+  pivot_wider(names_from = utility_name, values_from = residential_monthly_capacity_change) %>% 
+  # Only want yearly totals due to NREL cost per watt data
+  mutate(date = format(date, format = "%Y")) %>% 
+  replace(is.na(.), 0) %>% 
+  group_by(date) %>% 
+  #collapsing all year rows into one
+  summarise_each(funs(sum)) %>% 
+  # Column for total added capacity for year
+  mutate(total_kw_change = rowSums(.[2:10])) %>% 
+  # NREL cost per watt data only goes through 2017
+  filter(date <= 2017) %>% 
+  #NREL cost per watt data over time for residential PV systems
+  mutate(cost_per_kw = matrix(c(4480, 3920, 3440, 3180, 2980, 2800), ncol = 1),
+         utility_cost_per_kw = matrix(c(2570, 2270, 2090, 1850, 1380, 1130), ncol = 1)) %>% 
+  # Estimated amount spent on home PV for Utilities with the available data
+  mutate(total_cost = total_kw_change*cost_per_kw,
+         # Fed Tax Credit worth 30% of total cost
+         fed_tax_credit = total_cost*0.3,
+         # Assumes a sales tax rate of 8.9%, higher than average but probably closer to a true value
+         sales_tax_credit = total_cost*0.089,
+         total_tax_credit = fed_tax_credit + sales_tax_credit,
+         customer_cost = total_cost - total_tax_credit,
+         # Assumption 1kW saves 1.3505 MT of co2 per year over a 25 year lifecycle
+         co2_saved = total_kw_change*29.719,
+         # Social cost of carbon priced at $51/MT
+         scc_calculation = co2_saved*51,
+         utility_capacity = total_tax_credit/utility_cost_per_kw)
+
+cba_cost_graph <- plot_ly(data = cba_residential_solar_capacity_change,
+                     x = ~date, y = ~customer_cost, type = 'bar', name = 'Customer Cost') %>% 
+  add_trace(y = ~fed_tax_credit, name = 'Fed Tax Credit') %>% 
+  add_trace(y = ~sales_tax_credit, name = 'Sales Tax Credit') %>% 
+  layout(title = 'Residential PV Sales and Tax Credits for CO',yaxis = list(title = 'Total Sales ($)'), 
+         xaxis = list(title = 'Year'), barmode = 'stack')
+
+cba_price_per_watt <- ggplot(data = cba_residential_solar_capacity_change) +
+  geom_line(mapping =  aes(x = date, y = cost_per_kw, group = 1), size = 1.5, color = 'dodgerblue2') +
+  labs(title = "NREL Cost Per kW 2012-2017", subtitle = "5.7 kW system",
+       x = "Year", y = "Value ($)") +
+  theme_minimal()
+
+credit_vs_scc_data <- cba_residential_solar_capacity_change %>% 
+  select(date, total_tax_credit, scc_calculation) %>% 
+  pivot_longer(cols = c(total_tax_credit, scc_calculation), names_to = 'total')
+
+credit_vs_scc_graph <- ggplot(data = credit_vs_scc_data) +
+  geom_line(mapping =  aes(x = date, y = value, group = total, color = total), size = 1.5) +
+  labs(title = "Tax Cost vs Social Cost of Carbon (SCC) for Colorado", subtitle = "2012 - 2017",
+       x = "Year", y = "Value ($)", color = "") +
+  scale_y_continuous(labels = unit_format(unit = 'M', scale = 1e-6)) +
+  scale_color_manual(labels = c('SCC', 'Tax Cost'), values = c('cyan3', 'olivedrab4')) +
+  theme_minimal()
+
+cba_capacity_added <- ggplot(data = cba_residential_solar_capacity_change) +
+  geom_line(mapping =  aes(x = date, y = total_kw_change, group = 1), size = 1.5, color = 'dodgerblue2') +
+  labs(title = "Residential Solar Capacity Added 2012-2017",
+       x = "Year", y = "Capacity (kW)") +
+  theme_minimal()
+
+
+```
+
+## Executive Summary
+Do the social benefits from residential solar installations exceed the costs from subsidies and forgone revenue from tax incentives? This briefing is designed to answer this question in the state of Colorado. Data from Colorado utilities was examined to determine the total amount of capacity added from home PV installations from 2012-2017. Costs were determined by summing the total tax credits and tax breaks that home buyers received. The social cost of carbon (SCC) was valued at \$51/metric ton. Over the lifetime of residential solar panels installed in CO an estimated 4.9 million metric tons of CO2 will be saved valued at \$250.28 million. Estimated taxpayer costs over this period are \$217.13 million for a societal benefit of roughly $33 million. However the cost calculated represents a lower bound, strongly suggesting the benefit is smaller than reported.
+
+## Introduction
+This briefing tries to answer the question: do the benefits from subsidizing home solar installations outweigh the costs in Colorado? There are many government incentives to expand renewable energy capacity in the United States. Types of incentives include subsidies, tax breaks, tax credits, and net metering programs at both from a municipal to federal level. As a result of these incentives and falling costs, residential solar installations and solar capacity have increased dramatically in the US.
+
+The result is a lowering of greenhouse gas emissions and lower carbon footprint. It also generates job growth in the home solar sector. However, these benefits are not free and represent a cost to taxpayers in forgone tax revenue. There is also an issue of equity. Only those with the wealth to install solar benefit from these policies while lower income brackets cannot participate. Thus it is important to calculate the social benefits and compare them to the costs from home solar policies.
+
+## Data
+The data encompasses 2012-2017 and comes from the  [Energy Information Administration](https://www.eia.gov/) and the [Colorado Information Marketplace](https://data.colorado.gov/Environment/Electricity-Net-Metering-in-Colorado/y23n-tr7i). Data was available from the following utilities: City of Colorado Springs, City of Fort Collins, Intermountain Rural Electric Assn, Xcel Energy, San Luis Valley REC, United Power Inc, Black Hills Colorado Electric, Poudre Valley REA, and Moon Lake Electric Assn. Solar installation [cost per kilowatt](https://www.nrel.gov/docs/fy17osti/68925.pdf) comes from the National Renewable Energy Laboratory (NREL). Employment data comes from the Bureau of Labor Statistics [Occupational Wage and Employment Statistics](https://www.bls.gov/oes/current/oes472231.htm) (OEWS). Estimated carbon savings per kW came from an [estimate](https://pdf.sciencedirectassets.com/278653/1-s2.0-S1877705817X00210/1-s2.0-S1877705817317253/main.pdf?X-Amz-Security-Token=IQoJb3JpZ2luX2VjEAwaCXVzLWVhc3QtMSJIMEYCIQD4%2BkdJtBX05Qs3gwiqOWlkVudLeCYo0PLEakC7CcXSDQIhAKJAwethm4CCTtlurT5%2BYmPSI6yT1liJ2rZUZYRTDrjCKoMECNX%2F%2F%2F%2F%2F%2F%2F%2F%2F%2FwEQBBoMMDU5MDAzNTQ2ODY1IgwXAuVvp4Wo267jDy8q1wObssUZf4wPZcNS2RgPS29HPuM35riPIoXGbnkXWoz47q4%2BDZMrFDqZEzehuXmWRJSIEuVXKRZhFsqF124HWp47ma1y9tx5NHr0fkdSlGcqRPrlo13K4z9%2FcDwZlHM5X8srYiJsle%2B334s456tjWYDZv7uX0lRyMoUxrrFad6WYDC7pM4QDSJ4Kh%2FCyN1T%2BfzvFtC%2FhjgxydzBYVs6kjygE5PMFy4WH2XZuwIaSVtP8P5KfYB2kdTNxHThkFuAYxafXuQcWdEFWocu383JfWbmFIv7OHpTue7H1WYzFJlgZ7Y1oYj4XBmO%2BGPty7w5yWpYS1nidyuA582xe6E0lOQFwV00aD%2Br28hZJrxPgrBWd7jICARJcabo5KQRyhiLDpqc9aGNz1MyFJdXIujNJaus4MhjDeVPYwyXiBIUnF3rugQcVSrWmmd4pE5G9DloDYKGuDT7ma73a%2F5NktQ85lMOhFot1Or9GJPEyMmILzq7xCWCRVNhVES3lpDS9Ex0Vr5G822g%2BQxtKIhv17%2F7daRV%2BE8kC2sk5LELyaCsdBDg4%2Bx3X%2FmnuwaSrkXB%2FJvjzxJ806zxgPjMblbba2FFts2CTdYs3Tf1vGIQc222uj5Dsui7CYE6hjZMwx6DHhgY6pAE1lGD6HLK393C4fmX6cFLlmhzB1K96qYiTlk4r8G3lSnPIncYwe6Jd8VMhJjOc9GnkcS%2F0mqFqxfUUpX45ierk2uMDqJLEfYADVr08fW7HHZniGhIXm%2F1T1iUDzXyPdCMKOm8ST0Py10EGFjixOkyHtQjjX7WL63jn%2FVPjBFluTvSHv39depLeie3L3BNWrTe8l2JM1c84mxPbX8x5aVfGiNcx5w%3D%3D&X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Date=20210622T131251Z&X-Amz-SignedHeaders=host&X-Amz-Expires=300&X-Amz-Credential=ASIAQ3PHCVTYT3LPOAUH%2F20210622%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Signature=728c02d01948573431f75809eb26e39c9ba112560a908ab0a2eb1f0f5fb2ccfe&hash=6cd690041dea4a4a572dd705471123d948f66cabb90a6cadc2f5f3fc35d32876&host=68042c943591013ac2b2430a89b270f6af2c76d8dfd086a07176afe7c76c2c61&pii=S1877705817317253&tid=spdf-3a169d88-d75e-4a0c-8100-b9cd82e49ffb&sid=ce03b94292dd0548f57b4683edb4221e53ffgxrqa&type=client) by University of Technology Sydney. Information on tax credits and incentives come from the State of Colorado and Federal Government.
+
+```{r utility_locations, echo=FALSE}
+knitr::include_graphics("C:\\Users\\Jake\\Desktop\\r_projects\\shiny_projects\\co_solar_power\\colorado_electric_utility_service_territories_map.PNG")
+
+```
+
+## Limitations
+One major limitation of this briefing is the inability to incorporate all tax benefits that Colorado home solar consumers receive. Local municipalities have various incentive regimens to encourage solar installation. The data is not granular enough to know where solar is being installed, so any tax benefits at this level will not be incorporated into costs.
+
+Data on employment for home solar installers was only available by state for May 2020 from the OEWS. The data also does not include self employed installers. It is also unknown how many installation jobs were created as a result of the tax benefits to the industry. The additional employment benefit is not calculated into the total benefit to Colorado. However the total number of people employed as solar installers is estimated to be small.
+
+
+```{r home_solar_employment, out.width = "100%" , echo=FALSE}
+knitr::include_graphics("C:\\Users\\Jake\\Desktop\\r_projects\\shiny_projects\\co_solar_power\\co_solar_project\\solar_installers_co.PNG")
+```
+
+ Under Colorado law the increase in property value resulting from a solar installation may not be assessed with property taxes. Zillow estimates that nationally on average homes that install solar [increase 4.1% in value](https://www.zillow.com/research/solar-panels-house-sell-more-23798/). Information on Colorado specifically was not available. Thus the costs calculated below are to be considered a lower bound, since there is lost property tax revenue as a result of this law.
+
+Another limitation is the use of a flat sales tax rate of 8.9%. Sales taxes vary [county by county](https://www.salestaxhandbook.com/colorado/rates) in Colorado. The number was chosen to represent the rates found in more populated counties where the majority of solar installations are. 
+
+Lastly, while data was available for much of Colorado (with respect to population) there are many missing utilities. Many of these are small municipal ones or in less populated areas of the state. As a result the calculations made do not contain all of the solar capacity constructed, total benefits, or total costs reflected over the time period.
+
+## Methodology
+The social benefit was calculated by determining how much residential solar capacity was added year over year. This briefing estimates based on this paper that over a year 1 kW of solar will save approximately 1.3505 MT of CO2. Over a 25 year solar panel lifespan this amounts to a total of 29.719 MT of CO2 saved per kW of solar installed. This number accounts for a 1% annual degradation in solar panel efficacy.
+The SCC is set by the US government. As of [March 1, 2021 this is set at \$51](https://www.scientificamerican.com/article/cost-of-carbon-pollution-pegged-at-51-a-ton/#:~:text=Contributing%20to%20climate%20change%20is,to%20about%20%2451%20per%20ton.) per metric ton. To calculate the value of CO2 emissions saved the change in capacity was multiplied by the expected amount of CO2 saved, then multiplied again by the SCC to find a dollar value. 
+
+$PerKWSavings_t = (1.3505*(1-0.01)^t$
+
+$TotalPerKWSavings = \Sigma_{t=1}^{25}PerKWSavings$
+
+$SocialBenefit_y = TotalPerKWSavings* CapacityAdded_y*SCC$ 
+
+$TotalSocialBenefit = \Sigma_{y = 2012}^{2017}SocialBenefit$
+
+where y is the year and t corresponds to the expected lifespan of a solar panel.
+
+Costs were calculated by determining how much solar capacity was added year over year. Cost per kW pricing came from NREL. NREL cost per kW was calculated using a 5.7 kW residential system. Prices fell over the period of data available. Multiplying added capacity from one year by the cost per kW from the same year gives a total value of solar installation per year.
+
+```{r cost_per_watt, fig.show="hold", out.width="50%", echo=FALSE}
+cba_price_per_watt
+
+cba_capacity_added
+```
+
+Colorado passed the Sales and Use Tax Exemption for Renewable Energy Equipment Act in 2009. This exempts customers from paying any sales or use tax on renewable energy storage and installation. This lost revenue represents a cost to taxpayers. The sales tax was pegged at 8.9%. Sales tax is county by county. While it is lower in many rural areas of CO, 8.9% accurately reflects the average rate for urban populations where most home solar is being installed. Forgone annual tax revenue was calculated by multiplying the total value by 8.9%.
+
+The federal solar tax credit (ITC) allowed a 30% deduction of the cost of installing a solar energy system from federal tax obligations over the period of data. Again this represents lost revenue to taxpayers. The cost from this credit was calculated by multiplying the total value by 30%. 
+
+$SolarCost_y =  CapacityAdded_y * CostPerKW_y$
+
+$TotalSolarCost = \Sigma_{y = 2012}^{2017}SolarCost_y$
+
+$TotalSocialCost = TotalSolarCost*SalesTax + TotalSolarCost * ITC$
+
+```{r cost_graph, out.width='100%',  echo=FALSE}
+cba_cost_graph
+
+```
+## Results
+From 2012-2017 Colorado residents added approximately 165.13 megawatts worth of home solar capacity. This is estimated to have saved 4.9 million tons of CO2 from being emitted into the atmosphere. Pricing the SCC at \$51 dollars the total social benefit value is \$250.28 million. The costs associated with the available tax data totals \$217.13 million. The total estimated societal benefit is valued at \$33.15 million from 2012-2017. 
+
+```{r results,out.width='100%',  echo=FALSE}
+credit_vs_scc_graph
+```
+
+## Conclusions
+ Given the available data, the net benefits from home solar installation outweigh the costs from tax incentives. While the $33.15 million benefit is significant, this does not represent the true figure due to the limitations described above. There are also opportunity costs to consider. 
+ 
+Utilities can build solar at a significantly cheaper rate than residences, as well as maintain their panels better. If people's willingness to pay for home solar were instead to be used for utility scale solar installations the capacity and emissions saved would be higher. However people's willingness to pay for utility scale solar projects is likely different than their willingness to pay for personal home solar installations. 
+
+Expansions on this analysis would be to include more data. This includes housing data to try and ascertain exact locations of houses that have solar installations to include the lost property tax value. More data from Colorado utilities would also be useful. There is also the issue if residents are leasing their solar panels or own them outright. If the panels are being leased a depreciation tax credit must be included for the solar panel owners, further lowering the expected social benefits. 
+
+
+
+
+
+
+
